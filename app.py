@@ -6,7 +6,7 @@ import joblib
 app = Flask(__name__)
 model = joblib.load("asteroid_predictor_model.pkl")
 
-# Sample data for demonstration (Replace with your actual data)
+# Sample data (replace with your actual processed dataset)
 df = pd.DataFrame({
     "miss_distance_km": [18000000, 32000000, 1000000, 800000],
     "diameter_min_m": [300, 10, 400, 18],
@@ -16,7 +16,6 @@ df = pd.DataFrame({
     "close_approach_date": pd.to_datetime(['2025-03-01', '2025-03-05', '2025-03-07', '2025-03-10'])
 })
 
-# Load the HTML from a file
 @app.route('/')
 def home():
     with open("index.html", "r", encoding="utf-8") as f:
@@ -27,37 +26,32 @@ def home():
 def predict():
     data = request.get_json()
     try:
-        asteroid_data = pd.DataFrame([[
-            data["miss_distance_km"],
-            data["velocity_kph"],
-            data["diameter_min_m"],
-            data["diameter_max_m"]
-        ]], columns=["miss_distance_km", "velocity_kph", "diameter_min_m", "diameter_max_m"])
-
+        asteroid_data = pd.DataFrame([[data["miss_distance_km"], data["velocity_kph"],
+                                       data["diameter_min_m"], data["diameter_max_m"]]],
+                                     columns=["miss_distance_km", "velocity_kph",
+                                              "diameter_min_m", "diameter_max_m"])
         prediction = model.predict(asteroid_data)[0]
         result = "Hazardous" if prediction else "Not Hazardous"
         return jsonify({"prediction": result})
-    
     except Exception as e:
         return jsonify({"error": str(e)})
 
 @app.route('/line-graph')
 def line_graph():
-    # Group by asteroid size range
-    size_ranges = pd.cut(df["diameter_min_m"], bins=[0, 100, 200, 300, 400, 500], labels=["Small", "Medium", "Large", "Very Large", "Huge"])
-    size_count = size_ranges.value_counts()
+    # Grouping based on diameter size
+    df['size_category'] = pd.cut(df['diameter_min_m'],
+                                 bins=[0, 50, 150, 300, 500, 1000],
+                                 labels=["Tiny", "Small", "Medium", "Large", "Huge"])
+    size_count = df['size_category'].value_counts().sort_index()
 
-    # Create line graph
-    fig = px.line(x=size_count.index, y=size_count.values, title="Asteroid Frequency by Size",
-                  labels={"x": "Size Range", "y": "Number of Asteroids"})
+    fig = px.line(x=size_count.index, y=size_count.values,
+                  labels={"x": "Asteroid Size Category", "y": "Count"},
+                  title="Asteroid Frequency by Size Category")
+
     graph_html = fig.to_html(full_html=False)
-
-    # Correctly render HTML using render_template_string
     return render_template_string("""
         <html>
-            <head>
-                <title>Line Graph: Asteroid Frequency by Size</title>
-            </head>
+            <head><title>Line Graph</title></head>
             <body>
                 <h1>Asteroid Frequency by Size</h1>
                 {{ graph_html|safe }}
@@ -65,29 +59,42 @@ def line_graph():
         </html>
     """, graph_html=graph_html)
 
-# Time Series - Hazard levels over time
 @app.route('/time-series')
 def time_series():
-    # Count hazardous and non-hazardous asteroids over time
-    df['year'] = df['close_approach_date'].dt.year
-    df['month'] = df['close_approach_date'].dt.month
-    hazard_over_time = df.groupby(['year', 'month', 'prediction']).size().unstack().fillna(0)
+    df['year_month'] = df['close_approach_date'].dt.to_period('M').astype(str)
+    hazard_counts = df.groupby(['year_month', 'prediction']).size().unstack().fillna(0)
 
-    # Create time series plot
-    fig = px.line(hazard_over_time, title="Hazardous Asteroids Over Time",
-                  labels={"year": "Year", "value": "Count of Asteroids"})
+    fig = px.line(hazard_counts,
+                  labels={"value": "Asteroid Count", "year_month": "Date"},
+                  title="Hazardous vs Non-Hazardous Asteroids Over Time")
+    
     graph_html = fig.to_html(full_html=False)
-    return render_template_string(f"<html><body>{graph_html}</body></html>")
+    return render_template_string("""
+        <html>
+            <head><title>Time Series</title></head>
+            <body>
+                <h1>Hazard Levels Over Time</h1>
+                {{ graph_html|safe }}
+            </body>
+        </html>
+    """, graph_html=graph_html)
 
-# Scatter plot for asteroid trajectory (velocity vs. miss distance)
 @app.route('/trajectory')
 def trajectory():
-    # Scatter plot of velocity vs. miss distance
-    fig = px.scatter(df, x='miss_distance_km', y='velocity_kph', color='prediction',
-                     title="Asteroid Trajectory (Velocity vs. Miss Distance)",
+    fig = px.scatter(df, x="miss_distance_km", y="velocity_kph", color="prediction",
+                     title="Asteroid Trajectory (Miss Distance vs Velocity)",
                      labels={"miss_distance_km": "Miss Distance (km)", "velocity_kph": "Velocity (kph)"})
+    
     graph_html = fig.to_html(full_html=False)
-    return render_template_string(f"<html><body>{graph_html}</body></html>")
+    return render_template_string("""
+        <html>
+            <head><title>Asteroid Trajectory</title></head>
+            <body>
+                <h1>Asteroid Trajectory (Scatter)</h1>
+                {{ graph_html|safe }}
+            </body>
+        </html>
+    """, graph_html=graph_html)
 
 if __name__ == '__main__':
     app.run(debug=True)
